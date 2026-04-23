@@ -1,6 +1,13 @@
-# Fine-tune Whisper Large V3 for Taiwanese Mandarin ASR
+# Fine-tune Whisper / Breeze-ASR-26 for Taiwanese ASR
 
-Fine-tunes **Whisper Large V3** for Taiwanese Mandarin ASR using [Unsloth](https://github.com/unslothai/unsloth) LoRA on Google Colab.
+Two Unsloth LoRA notebooks for Taiwanese speech recognition on Google Colab.
+
+| Notebook | Base Model | Target Language | Output |
+|---|---|---|---|
+| `whisper_taiwan_finetune.ipynb` | [`unsloth/whisper-large-v3`](https://huggingface.co/unsloth/whisper-large-v3) | Taiwanese Mandarin (國語) | Traditional Chinese |
+| `breezeasr26_taiwan_finetune.ipynb` | [`MediaTek-Research/Breeze-ASR-26`](https://huggingface.co/MediaTek-Research/Breeze-ASR-26) | Taiwanese Hokkien (台語) | Traditional Chinese (漢字) |
+
+> Breeze-ASR-26 is MediaTek's fine-tune of **Whisper Large V2** (not V3) for Taigi. It outputs Mandarin Chinese characters, not Tâi-lô romanization.
 
 ## Key Design Decisions
 
@@ -10,13 +17,21 @@ Fine-tunes **Whisper Large V3** for Taiwanese Mandarin ASR using [Unsloth](https
 - **`generation_config.language/task`** instead of deprecated `forced_decoder_ids`
 - **Eval via logits argmax** (not `predict_with_generate`) — CER may read artificially high (e.g. 246%); this is expected. Watch validation loss instead.
 
-## Dataset & Model
+## Datasets & Published Models
+
+### Whisper Large V3 — Taiwanese Mandarin
 
 | | |
 |---|---|
-| Base model | [`unsloth/whisper-large-v3`](https://huggingface.co/unsloth/whisper-large-v3) |
 | Dataset | [`adi-gov-tw/Taiwan-Tongues-ASR-CE-dataset-zhtw`](https://huggingface.co/datasets/adi-gov-tw/Taiwan-Tongues-ASR-CE-dataset-zhtw) |
-| Hardware | Colab T4 (15 GB) / A100 |
+| Published model | [`shooding/faster-whisper-large-v3-zh-TW`](https://huggingface.co/shooding/faster-whisper-large-v3-zh-TW) |
+
+### Breeze-ASR-26 — Taiwanese Hokkien
+
+| | |
+|---|---|
+| Dataset | [`adi-gov-tw/Taiwan-Tongues-ASR-CE-dataset-zhtw`](https://huggingface.co/datasets/adi-gov-tw/Taiwan-Tongues-ASR-CE-dataset-zhtw) (Mandarin regularizer) + custom Taigi recordings |
+| Published model | [`shooding/taiwan-breeze-asr-26`](https://huggingface.co/shooding/taiwan-breeze-asr-26) |
 
 ## Custom Recordings (Optional)
 
@@ -36,14 +51,14 @@ rec_001.wav,your transcription here
 rec_002.wav,your transcription here
 ```
 
-Custom samples are interleaved into the main dataset at `prob=0.03` — targeting ~5 repeats, which avoids overfitting for small sets (<200 samples).
+For Whisper V3, custom samples are interleaved at `prob=0.03` (~5 repeats for <200 samples).
+For Breeze-ASR-26, set `USE_MAIN_DATASET=True` to keep a Mandarin regularizer; `CUSTOM_PROB=0.0625` targets ~10 repeats over 2000 steps.
 
 ## Google Drive Layout
 
-All artifacts are persisted to Drive automatically:
-
 ```
-MyDrive/taiwan-whisper/
+MyDrive/taiwan-whisper/          ← Whisper Large V3
+MyDrive/taiwan-breeze-asr-26/    ← Breeze-ASR-26
 ├── hf_cache/             ← HuggingFace model & dataset cache
 ├── checkpoints/          ← Training checkpoints (auto-resume on reconnect)
 ├── final_model/          ← LoRA adapters
