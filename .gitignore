@@ -1,0 +1,16 @@
+# Python virtualenv
+venv/
+__pycache__/
+*.pyc
+
+# Unsloth runtime-generated kernel cache
+unsloth_compiled_cache/
+
+# Working dir: HF cache, checkpoints, extracted custom_data
+work/
+
+# Raw data archives (large; not source)
+*.zip
+
+# Local Claude settings
+.claude/settings.local.json
