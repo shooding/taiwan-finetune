@@ -96,8 +96,16 @@ Training auto-resumes from the latest checkpoint in `work/checkpoints/` if one
 exists. Outputs: LoRA adapters → `work/final_model/`, merged 16-bit model →
 `work/merged_model/`, CTranslate2 (faster-whisper) → `work/faster_whisper_ct2/`.
 
-Publishing to the Hugging Face Hub uses `HF_TOKEN` from the environment:
+## Publish to Hugging Face Hub
+
+Uploading the CT2 model is a separate step in `upload_to_hf.py` (so training
+doesn't require any HF credentials). After training finishes:
 
 ```bash
-export HF_TOKEN=hf_...
+export HF_TOKEN=hf_...          # write-scope token (prompts if unset)
+./venv/bin/python upload_to_hf.py
 ```
+
+Repo defaults to `shooding/faster-whisper-large-v3-zh-TW`; override with
+`HF_REPO_ID`. The model and the open-source dataset are public, so **no token is
+needed for training** — only for this upload step.

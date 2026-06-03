@@ -489,38 +489,9 @@ subprocess.run([
 
 print(f'faster-whisper model saved → {CT2_OUTPUT}')
 
-from huggingface_hub import HfApi, create_repo, upload_folder
-import os
-
-# Define the local path of the CTranslate2 model
-CT2_OUTPUT = f'{BASE_DIR}/faster_whisper_ct2'
-
-# Define the Hugging Face repository ID
-HF_REPO_ID = 'shooding/faster-whisper-large-v3-zh-TW'
-
-# Get Hugging Face token (export HF_TOKEN=... before running)
-HF_TOKEN = os.getenv('HF_TOKEN')
-if not HF_TOKEN:
-    raise ValueError('HF_TOKEN env var is required to upload to Hugging Face. '
-                     'Run `export HF_TOKEN=hf_...` before launching.')
-
-api = HfApi()
-
-# Create the repository if it doesn't exist
-create_repo(repo_id=HF_REPO_ID, repo_type='model', token=HF_TOKEN, exist_ok=True)
-print(f'Hugging Face repository "{HF_REPO_ID}" ensured to exist.')
-
-# Upload the model folder
-print(f'Uploading model from {CT2_OUTPUT} to {HF_REPO_ID}...')
-upload_folder(
-    folder_path=CT2_OUTPUT,
-    repo_id=HF_REPO_ID,
-    repo_type='model',
-    token=HF_TOKEN,
-    commit_message='Upload faster-whisper CTranslate2 model'
-)
-
-print(f'Model successfully uploaded to https://huggingface.co/{HF_REPO_ID}')
+# 上傳到 Hugging Face Hub 已抽離成獨立腳本（需要 HF_TOKEN）：
+#     export HF_TOKEN=hf_...
+#     ./venv/bin/python upload_to_hf.py
 
 """## 附錄：macOS 自錄音準備腳本
 
@@ -550,34 +521,3 @@ print(f'Model successfully uploaded to https://huggingface.co/{HF_REPO_ID}')
 # print(f'metadata.csv created with {len(rows)} entries')
 
 print('See comments above for macOS preparation script.')
-
-"""## 13. Publish to Hugging Face Hub (faster-whisper / CTranslate2 format)
-
-Push the CT2-converted model + model card to Hugging Face
-"""
-
-from huggingface_hub import HfApi, login
-from getpass import getpass
-import os, textwrap
-
-HF_REPO_ID = 'shooding/faster-whisper-large-v3-zh-TW'
-
-CT2_OUTPUT = f'{BASE_DIR}/faster_whisper_ct2'
-
-assert os.path.isdir(CT2_OUTPUT), f'CT2 dir not found: {CT2_OUTPUT}'
-
-# Auth: prefer env var, else prompt
-hf_token = os.environ.get('HF_TOKEN') or getpass('HF token (write scope): ')
-login(token=hf_token)
-
-# Create repo (no-op if it already exists) and upload CT2 artifacts
-api = HfApi()
-api.create_repo(repo_id=HF_REPO_ID, repo_type='model', exist_ok=True, private=False)
-api.upload_folder(
-    folder_path=CT2_OUTPUT,
-    repo_id=HF_REPO_ID,
-    repo_type='model',
-    commit_message='Upload CTranslate2 LoRA fine-tune with more custom_data',
-    ignore_patterns=['__pycache__', '.ipynb_checkpoints'],
-)
-print(f'Published -> https://huggingface.co/{HF_REPO_ID}')
