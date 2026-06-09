@@ -5,11 +5,11 @@ Concept (cf. github.com/karpathy/autoresearch): optimize the metric you actually
 deploy, within a wall-clock budget, journaling every trial and deciding
 continue-vs-adjust automatically.
 
-What's different from whisper_taiwan_finetune.py
-------------------------------------------------
+What's different from a plain single-run fine-tune
+--------------------------------------------------
 1. REAL CER. Uses predict_with_generate=True, so eval CER comes from
-   model.generate() — the number you actually ship. (The original script's
-   argmax-on-logits CER is teacher-forced and meaningless, yet it drove
+   model.generate() — the number you actually ship. (A teacher-forced
+   argmax-on-logits CER is meaningless for selection, yet a plain run drove
    model selection; that alone can explain "CER not good enough".)
 2. Mandarin-only anchor. Filters the open-source Taiwan-Tongues stream to
    predominantly-CJK transcripts (drops indigenous / romanized / heavy-English),

@@ -2,10 +2,10 @@
 """upload_to_hf.py
 
 Publish the CTranslate2 (faster-whisper) model produced by
-`whisper_taiwan_finetune.py` to the Hugging Face Hub.
+`autoresearch.py` to the Hugging Face Hub.
 
-Prerequisite: training has finished and the CT2 artifact exists at
-`{BASE_DIR}/faster_whisper_ct2` (the training script writes it in section 12).
+Prerequisite: a run has finished and the CT2 artifact exists at
+`{BASE_DIR}/faster_whisper_ct2` (autoresearch.py writes it on completion).
 
 Auth: export a write-scope token before running, or it will prompt:
     export HF_TOKEN=hf_...
@@ -16,14 +16,14 @@ import os
 from getpass import getpass
 from huggingface_hub import HfApi
 
-# Same path convention as whisper_taiwan_finetune.py (override via env var).
+# Same path convention as autoresearch.py (override via env var).
 BASE_DIR   = os.environ.get('TAIWAN_WHISPER_DIR',
                             os.path.expanduser('~/taiwan_finetune/work'))
 CT2_OUTPUT = f'{BASE_DIR}/faster_whisper_ct2'
 HF_REPO_ID = os.environ.get('HF_REPO_ID', 'shooding/faster-whisper-large-v3-zh-TW')
 
 assert os.path.isdir(CT2_OUTPUT), (
-    f'CT2 dir not found: {CT2_OUTPUT}. Run whisper_taiwan_finetune.py first '
+    f'CT2 dir not found: {CT2_OUTPUT}. Run autoresearch.py first '
     f'(or set TAIWAN_WHISPER_DIR).'
 )
 

@@ -5,8 +5,10 @@ LoRA, on a **DGX Spark GB10** host. Mixes the open-source
 `adi-gov-tw/Taiwan-Tongues-ASR-CE-dataset-zhtw` (streamed) with a local
 custom recording set (餐點語料) for domain adaptation.
 
-The training script is `whisper_taiwan_finetune.py` (ported from the original
-Colab notebook — no Google Drive / Colab dependencies).
+The training entry point is `autoresearch.py` — a budget-bounded controller that
+optimizes the real (generation) CER you deploy and re-runs cleanly as you add
+recordings (see [Autoresearch loop](#autoresearch-loop-recommended-for-tuning-cer)).
+`upload_to_hf.py` publishes the resulting CTranslate2 model.
 
 ## Hardware / platform assumed
 
@@ -60,9 +62,27 @@ GPU wheels.
   `soundfile`/`librosa`; the bundled libsndfile 1.2.2 handles mp3 + wav, so no
   torchcodec/ffmpeg dependency.
 
-If installing from scratch instead of `requirements.txt`, see the recipe in the
-header comment of `whisper_taiwan_finetune.py` (install order matters — Unsloth
-will pull a CPU torch, then force-reinstall the cu130 build).
+If installing from scratch instead of `requirements.txt`, order matters — Unsloth
+caps `torch<2.11` and pulls a CPU build, so install the stack first, then
+force-reinstall the cu130 GPU build last:
+
+```bash
+source venv/bin/activate
+pip install "numpy<2.3" librosa soundfile evaluate jiwer
+pip install unsloth
+pip install transformers==4.56.2
+pip install --no-deps trl==0.22.2
+pip install --no-deps torchao==0.17.0
+pip install ctranslate2 faster-whisper
+pip install "datasets==3.6.0"          # 3.x decodes audio via soundfile (no torchcodec/FFmpeg)
+# Force the GB10 GPU torch back (Unsloth downgraded it to CPU):
+pip install --index-url https://download.pytorch.org/whl/cu130 \
+    --force-reinstall --no-deps "torch==2.10.0+cu130"
+pip install --index-url https://download.pytorch.org/whl/cu130 "torchaudio==2.10.0"
+pip install "triton==3.6.0"            # the triton torch 2.10 expects (Unsloth kernels)
+```
+
+Verify: `./venv/bin/python -c "import torch; print(torch.cuda.is_available())"` → `True`.
 
 ## Data layout
 
@@ -72,11 +92,27 @@ Working dir defaults to `~/taiwan_finetune/work` (override with
 ```
 ~/taiwan_finetune/work/
 ├── hf_cache/          # HuggingFace model/dataset cache
-├── checkpoints/       # training checkpoints (auto-resume)
+├── checkpoints/       # per-trial training checkpoints
+├── autoresearch/      # journal.jsonl + best_adapter
+├── final_model/       # best LoRA adapter (deployable)
+├── merged_model/      # merged 16-bit (intermediate for CT2)
+├── faster_whisper_ct2/ # CTranslate2 model (the upload target)
 └── custom_data/       # your recordings (override with CUSTOM_DATA_DIR)
     ├── metadata.csv   # columns: file_name,transcription
     ├── rec_001.wav
     └── ...
+```
+
+To prepare `metadata.csv` from a folder of recordings (run wherever you record,
+e.g. macOS):
+
+```python
+import os, pandas as pd
+RECORDINGS_DIR = os.path.expanduser('~/my_recordings')
+transcriptions = {'rec_001.wav': 'A套餐', 'rec_002.wav': 'B套餐'}  # fill in
+rows = [{'file_name': f, 'transcription': t} for f, t in transcriptions.items()
+        if os.path.exists(os.path.join(RECORDINGS_DIR, f))]
+pd.DataFrame(rows).to_csv(os.path.join(RECORDINGS_DIR, 'metadata.csv'), index=False)
 ```
 
 To unpack a custom-data zip into place:
@@ -89,12 +125,14 @@ unzip custom_data_2026-05-29.zip -d ~/taiwan_finetune/work/
 ## Run
 
 ```bash
-./venv/bin/python whisper_taiwan_finetune.py
+./venv/bin/python autoresearch.py
 ```
 
-Training auto-resumes from the latest checkpoint in `work/checkpoints/` if one
-exists. Outputs: LoRA adapters → `work/final_model/`, merged 16-bit model →
-`work/merged_model/`, CTranslate2 (faster-whisper) → `work/faster_whisper_ct2/`.
+Outputs: best LoRA adapter → `work/final_model/`, merged 16-bit →
+`work/merged_model/`, CTranslate2 (faster-whisper) → `work/faster_whisper_ct2/`,
+and a per-trial decision log in `work/autoresearch/journal.jsonl`. See the
+[Autoresearch loop](#autoresearch-loop-recommended-for-tuning-cer) section for how
+it works and what to tune.
 
 ## Autoresearch loop (recommended for tuning CER)
 
@@ -106,8 +144,8 @@ hand-watching the run.
 
 ### Why it exists
 
-The plain `whisper_taiwan_finetune.py` had two problems that made "final CER not
-good enough" hard to act on:
+The original plain training script (a single linear `Seq2SeqTrainer` run, since
+removed) had two problems that made "final CER not good enough" hard to act on:
 
 1. Its eval CER was computed from **teacher-forced argmax on decoder logits**, not
    real generation — a meaningless number (often >200), yet `metric_for_best_model`
@@ -168,10 +206,9 @@ lr=1e-4); the deployed CT2 model verified at **0.00% CER** on held-out clips.
 Tunable via env: `TIME_BUDGET_SEC`, `TARGET_CER`, `LR_LADDER` (comma-sep),
 `EVAL_STEPS`, `EVAL_CAP`, `GENERAL_N` (0 disables the anti-forgetting eval),
 `N_HELDOUT_TEXTS`, `CUSTOM_PROB`, `MANDARIN_THR`, `EARLY_PATIENCE`, `MAX_STEPS_TRIAL`,
-`DO_CT2`, `BASE_MODEL_ID`. The plain `whisper_taiwan_finetune.py` remains the simple
-single-run path.
+`DO_CT2`, `BASE_MODEL_ID`.
 
-> **Merge note.** Both scripts merge LoRA via PEFT `merge_and_unload()`, **not**
+> **Merge note.** The model is merged via PEFT `merge_and_unload()`, **not**
 > unsloth's `save_pretrained_merged` — the latter corrupts the Whisper merge
 > (adapter is fine, but the merged/CT2 model emits garbage). The merge reloads a
 > clean base (`BASE_MODEL_ID`, default `openai/whisper-large-v3`) + the saved
