@@ -478,8 +478,10 @@ print('merged_model contents:', sorted(os.listdir(MERGED_DIR)))
 # Step 2：轉換為 CTranslate2 格式（需先 pip install ctranslate2）
 CT2_OUTPUT = f'{BASE_DIR}/faster_whisper_ct2'
 
+# Use the converter from THIS venv (not on PATH when run via ./venv/bin/python).
+ct2_bin = os.path.join(os.path.dirname(sys.executable), 'ct2-transformers-converter')
 subprocess.run([
-    'ct2-transformers-converter',
+    ct2_bin,
     '--model', MERGED_DIR,
     '--output_dir', CT2_OUTPUT,
     '--copy_files', 'tokenizer.json', 'preprocessor_config.json',

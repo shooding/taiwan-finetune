@@ -96,6 +96,37 @@ Training auto-resumes from the latest checkpoint in `work/checkpoints/` if one
 exists. Outputs: LoRA adapters → `work/final_model/`, merged 16-bit model →
 `work/merged_model/`, CTranslate2 (faster-whisper) → `work/faster_whisper_ct2/`.
 
+## Autoresearch loop (recommended for tuning CER)
+
+`autoresearch.py` is a budget-bounded controller (cf.
+[karpathy/autoresearch](https://github.com/karpathy/autoresearch)) for iterating
+on CER as you grow the custom dataset. Key differences from the plain script:
+
+- **Real CER.** Uses `predict_with_generate=True`, so eval CER comes from
+  `model.generate()` — the number you actually deploy. The plain script's
+  argmax-on-logits CER is teacher-forced and meaningless, yet it drove model
+  selection; switching to real CER is the single biggest fix for "CER not good
+  enough."
+- **Mandarin-only anchor.** Filters the open-source Taiwan-Tongues stream to
+  predominantly-CJK transcripts (drops indigenous / romanized / heavy-English),
+  so the anti-forgetting anchor doesn't pull the model off Mandarin.
+- **Controller.** Trains a trial with early-stopping on real domain CER; if it
+  plateaus and budget remains and CER is above target, it retries at the next
+  learning rate in a small ladder, keeping the global-best adapter. Every trial
+  is logged to `work/autoresearch/journal.jsonl`.
+
+```bash
+export TIME_BUDGET_SEC=7200      # wall-clock budget (default 2h)
+./venv/bin/python autoresearch.py
+```
+
+Tunable via env: `TIME_BUDGET_SEC`, `TARGET_CER` (stop once real CER ≤ this),
+`LR_LADDER` (comma-sep), `EVAL_STEPS`, `EVAL_CAP`, `GENERAL_N` (0 disables the
+anti-forgetting eval), `MANDARIN_THR` (0–1, default 0.6), `DO_CT2`. On finish it
+writes the best LoRA adapter to `work/final_model/` and, when the best model is
+live, the merged + CT2 artifacts too. The plain `whisper_taiwan_finetune.py`
+remains the simple single-run path.
+
 ## Publish to Hugging Face Hub
 
 Uploading the CT2 model is a separate step in `upload_to_hf.py` (so training
