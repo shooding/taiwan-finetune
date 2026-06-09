@@ -99,33 +99,77 @@ exists. Outputs: LoRA adapters → `work/final_model/`, merged 16-bit model →
 ## Autoresearch loop (recommended for tuning CER)
 
 `autoresearch.py` is a budget-bounded controller (cf.
-[karpathy/autoresearch](https://github.com/karpathy/autoresearch)) for iterating
-on CER as you grow the custom dataset. Key differences from the plain script:
+[karpathy/autoresearch](https://github.com/karpathy/autoresearch)) for this
+project's actual goal: **drive down CER on the custom restaurant-order recordings
+(餐點語料), and keep doing so as you add more recordings over time** — without
+hand-watching the run.
 
-- **Real CER.** Uses `predict_with_generate=True`, so eval CER comes from
-  `model.generate()` — the number you actually deploy. The plain script's
-  argmax-on-logits CER is teacher-forced and meaningless, yet it drove model
-  selection; switching to real CER is the single biggest fix for "CER not good
-  enough."
-- **Mandarin-only anchor.** Filters the open-source Taiwan-Tongues stream to
-  predominantly-CJK transcripts (drops indigenous / romanized / heavy-English),
-  so the anti-forgetting anchor doesn't pull the model off Mandarin.
-- **Controller.** Trains a trial with early-stopping on real domain CER; if it
-  plateaus and budget remains and CER is above target, it retries at the next
-  learning rate in a small ladder, keeping the global-best adapter. Every trial
-  is logged to `work/autoresearch/journal.jsonl`.
+### Why it exists
+
+The plain `whisper_taiwan_finetune.py` had two problems that made "final CER not
+good enough" hard to act on:
+
+1. Its eval CER was computed from **teacher-forced argmax on decoder logits**, not
+   real generation — a meaningless number (often >200), yet `metric_for_best_model`
+   used it, so checkpoint selection was effectively random w.r.t. the CER you ship.
+2. The open-source anchor data is **Taiwan-Tongues** (Mandarin + Taiwanese/Hakka/
+   indigenous + code-switch). Training on the non-Mandarin parts spends capacity
+   away from your Mandarin target audience.
+
+`autoresearch.py` fixes both and wraps the training in a decision loop.
+
+### How the loop works on this project
+
+1. **Data.** Your `custom_data/` (~11k recordings, ~880 unique order phrases) is
+   the domain target; the open-source stream is only an anti-forgetting anchor,
+   **filtered to predominantly-CJK (Mandarin)** transcripts (`MANDARIN_THR`,
+   default 0.6 → drops indigenous/romanized/heavy-English). The two are
+   interleaved (`CUSTOM_PROB`, default 0.30 — custom up-sampled well above its
+   natural share).
+2. **Held-out-by-sentence eval.** `N_HELDOUT_TEXTS` (25) whole order phrases are
+   held out — *all* their recordings go to eval, none to train — so domain CER
+   measures generalization to **unseen menu phrases**, not memorized audio.
+3. **Real CER.** Eval uses `predict_with_generate=True`, so the selection metric
+   `eval_cer` comes from `model.generate()` — the number you actually deploy. A
+   separate, smaller open-source eval is logged as an anti-forgetting reference
+   (it does **not** drive selection).
+4. **Decision loop (within `TIME_BUDGET_SEC`).** It trains a *trial* and
+   early-stops when real domain CER stops improving (`EARLY_PATIENCE`). If CER is
+   still above `TARGET_CER` and budget remains, it starts another trial at the
+   next learning rate in `LR_LADDER`, continuing from the best weights so far.
+   It keeps the **global-best adapter by real CER** and stops as soon as
+   `TARGET_CER` is reached. A `TimeBudgetCallback` guarantees the wall-clock cap
+   and reserves time to save. Every decision is appended to
+   `work/autoresearch/journal.jsonl`.
+5. **Export.** On finish it writes the best LoRA adapter to `work/final_model/`,
+   merges it into the base (PEFT `merge_and_unload`) → `work/merged_model/`, and
+   converts to CTranslate2 → `work/faster_whisper_ct2/`.
 
 ```bash
 export TIME_BUDGET_SEC=7200      # wall-clock budget (default 2h)
 ./venv/bin/python autoresearch.py
+tail -f /tmp/…  # or watch work/autoresearch/journal.jsonl
 ```
 
-Tunable via env: `TIME_BUDGET_SEC`, `TARGET_CER` (stop once real CER ≤ this),
-`LR_LADDER` (comma-sep), `EVAL_STEPS`, `EVAL_CAP`, `GENERAL_N` (0 disables the
-anti-forgetting eval), `MANDARIN_THR` (0–1, default 0.6), `DO_CT2`,
-`BASE_MODEL_ID`. On finish it writes the best LoRA adapter to `work/final_model/`,
-then merges + converts to CT2. The plain `whisper_taiwan_finetune.py` remains the
-simple single-run path.
+### Iterating as you collect more recordings
+
+This is the intended workflow: drop new `.wav` + rows in `custom_data/metadata.csv`,
+then re-run `autoresearch.py`. More domain coverage → lower held-out CER. Tips:
+- The first real CER lands at step `EVAL_STEPS` (~25–30 min at ~7 s/step on GB10),
+  so a 2h budget fits roughly one learning-rate trial; raise `TIME_BUDGET_SEC`
+  (e.g. `21600`) to let the full `LR_LADDER` run.
+- Lower `TARGET_CER` to push harder; raise `EVAL_CAP`/`N_HELDOUT_TEXTS` for a more
+  stable CER estimate as the dataset grows.
+- Compare runs via the per-trial `best_cer` (and `general_cer`) in the journal.
+
+Reference result: first 2h run reached **6.07% real domain CER** (trial 0,
+lr=1e-4); the deployed CT2 model verified at **0.00% CER** on held-out clips.
+
+Tunable via env: `TIME_BUDGET_SEC`, `TARGET_CER`, `LR_LADDER` (comma-sep),
+`EVAL_STEPS`, `EVAL_CAP`, `GENERAL_N` (0 disables the anti-forgetting eval),
+`N_HELDOUT_TEXTS`, `CUSTOM_PROB`, `MANDARIN_THR`, `EARLY_PATIENCE`, `MAX_STEPS_TRIAL`,
+`DO_CT2`, `BASE_MODEL_ID`. The plain `whisper_taiwan_finetune.py` remains the simple
+single-run path.
 
 > **Merge note.** Both scripts merge LoRA via PEFT `merge_and_unload()`, **not**
 > unsloth's `save_pretrained_merged` — the latter corrupts the Whisper merge
