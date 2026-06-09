@@ -459,20 +459,25 @@ import os
 import subprocess
 
 # Step 1：合併 LoRA → 完整 16bit 模型
-MERGED_DIR = f'{BASE_DIR}/merged_model'
-model.save_pretrained_merged(MERGED_DIR, tokenizer, save_method="merged_16bit")
+# 用 PEFT 的 merge_and_unload，**不要**用 unsloth 的 save_pretrained_merged：
+# 後者在 Whisper 上會產生壞掉的合併（adapter 正常但合併後輸出亂碼）。
+# 重新載入乾淨的 base + 剛存的 adapter（FINAL_MODEL_DIR）來合併。
+import torch as _torch
+from transformers import WhisperForConditionalGeneration as _WFC, WhisperProcessor as _WP
+from peft import PeftModel as _PM
+
+MERGED_DIR    = f'{BASE_DIR}/merged_model'
+BASE_MODEL_ID = os.environ.get('BASE_MODEL_ID', 'openai/whisper-large-v3')
+
+_base = _WFC.from_pretrained(BASE_MODEL_ID, dtype=_torch.float16)
+_merged = _PM.from_pretrained(_base, FINAL_MODEL_DIR).merge_and_unload()
+_merged.generation_config.language = '<|zh|>'
+_merged.generation_config.task = 'transcribe'
+_merged.generation_config.forced_decoder_ids = None
+_merged.save_pretrained(MERGED_DIR, safe_serialization=True)
+_WP.from_pretrained(FINAL_MODEL_DIR).save_pretrained(MERGED_DIR)
+del _base, _merged
 print(f'Merged model saved → {MERGED_DIR}')
-
-# 確保 config.json 存在（save_pretrained_merged 有時不寫入）
-if not os.path.exists(f'{MERGED_DIR}/config.json'):
-    model.config.save_pretrained(MERGED_DIR)
-    print('config.json manually saved')
-
-# 確保 tokenizer 相關檔案存在
-tokenizer.save_pretrained(MERGED_DIR)
-print('Tokenizer files saved')
-
-# 驗證目錄內容
 print('merged_model contents:', sorted(os.listdir(MERGED_DIR)))
 
 # Step 2：轉換為 CTranslate2 格式（需先 pip install ctranslate2）

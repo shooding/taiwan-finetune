@@ -122,10 +122,31 @@ export TIME_BUDGET_SEC=7200      # wall-clock budget (default 2h)
 
 Tunable via env: `TIME_BUDGET_SEC`, `TARGET_CER` (stop once real CER ≤ this),
 `LR_LADDER` (comma-sep), `EVAL_STEPS`, `EVAL_CAP`, `GENERAL_N` (0 disables the
-anti-forgetting eval), `MANDARIN_THR` (0–1, default 0.6), `DO_CT2`. On finish it
-writes the best LoRA adapter to `work/final_model/` and, when the best model is
-live, the merged + CT2 artifacts too. The plain `whisper_taiwan_finetune.py`
-remains the simple single-run path.
+anti-forgetting eval), `MANDARIN_THR` (0–1, default 0.6), `DO_CT2`,
+`BASE_MODEL_ID`. On finish it writes the best LoRA adapter to `work/final_model/`,
+then merges + converts to CT2. The plain `whisper_taiwan_finetune.py` remains the
+simple single-run path.
+
+> **Merge note.** Both scripts merge LoRA via PEFT `merge_and_unload()`, **not**
+> unsloth's `save_pretrained_merged` — the latter corrupts the Whisper merge
+> (adapter is fine, but the merged/CT2 model emits garbage). The merge reloads a
+> clean base (`BASE_MODEL_ID`, default `openai/whisper-large-v3`) + the saved
+> adapter.
+
+### Sanity-check the CT2 model before deploying
+
+Always verify the converted model actually transcribes (catches merge/convert
+regressions):
+
+```python
+from faster_whisper import WhisperModel
+m = WhisperModel('work/faster_whisper_ct2', device='cpu', compute_type='int8')
+segs, _ = m.transcribe('work/custom_data/rec_001.wav', language='zh', beam_size=5)
+print(''.join(s.text for s in segs))
+```
+
+Note: the installed `ctranslate2` wheel is CPU-only on this host; GPU serving
+needs a CUDA-enabled ctranslate2 build.
 
 ## Publish to Hugging Face Hub
 

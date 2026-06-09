@@ -66,6 +66,8 @@ GENERAL_SKIP    = int(os.environ.get('GENERAL_SKIP', 20000))
 N_HELDOUT_TEXTS = int(os.environ.get('N_HELDOUT_TEXTS', 25))
 CUSTOM_PROB     = float(os.environ.get('CUSTOM_PROB', 0.30))
 MANDARIN_THR    = float(os.environ.get('MANDARIN_THR', 0.60))
+# Canonical base for the final PEFT merge (verified to reproduce the adapter's CER).
+BASE_MODEL_ID   = os.environ.get('BASE_MODEL_ID', 'openai/whisper-large-v3')
 EARLY_PATIENCE  = int(os.environ.get('EARLY_PATIENCE', 2))
 GEN_MAX_LEN     = int(os.environ.get('GEN_MAX_LEN', 225))
 DO_CT2          = os.environ.get('DO_CT2', '1') == '1'
@@ -431,40 +433,43 @@ if best_trial is not None and os.path.isdir(BEST_ADAPTER):
     shutil.copytree(BEST_ADAPTER, FINAL_MODEL_DIR)
     log(f'Best LoRA adapter → {FINAL_MODEL_DIR}')
 
-    # Merge + CT2 need the live model to hold the best weights. Only auto-export
-    # when that's true (common: best == last/only trial). Otherwise we don't risk
-    # adapter-reload gymnastics — just tell the user how to convert from the adapter.
-    if live_is_best:
-        log('Saving merged 16-bit model...')
-        try:
-            model.save_pretrained_merged(MERGED_DIR, tokenizer, save_method='merged_16bit')
-            if not os.path.exists(f'{MERGED_DIR}/config.json'):
-                model.config.save_pretrained(MERGED_DIR)
-            tokenizer.save_pretrained(MERGED_DIR)
-            log(f'Merged model → {MERGED_DIR}')
-        except Exception as e:  # noqa: BLE001
-            log(f'WARN: merge failed ({e}); LoRA adapter still at {FINAL_MODEL_DIR}.')
+    # Merge via PEFT merge_and_unload — NOT unsloth save_pretrained_merged, which
+    # produced a corrupted Whisper merge (garbage transcripts despite a good
+    # adapter). Reload base + the best adapter (FINAL_MODEL_DIR always holds the
+    # global best) and merge cleanly.
+    log('Merging best adapter into base (PEFT merge_and_unload)...')
+    merged_ok = False
+    try:
+        from transformers import WhisperForConditionalGeneration as _WFC, WhisperProcessor as _WP
+        from peft import PeftModel as _PM
+        _base = _WFC.from_pretrained(BASE_MODEL_ID, dtype=torch.float16)
+        _merged = _PM.from_pretrained(_base, FINAL_MODEL_DIR).merge_and_unload()
+        _merged.generation_config.language = '<|zh|>'
+        _merged.generation_config.task = 'transcribe'
+        _merged.generation_config.forced_decoder_ids = None
+        _merged.save_pretrained(MERGED_DIR, safe_serialization=True)
+        _WP.from_pretrained(FINAL_MODEL_DIR).save_pretrained(MERGED_DIR)
+        del _base, _merged
+        log(f'Merged model → {MERGED_DIR}')
+        merged_ok = True
+    except Exception as e:  # noqa: BLE001
+        log(f'WARN: PEFT merge failed ({e}); LoRA adapter still at {FINAL_MODEL_DIR}.')
 
-        if DO_CT2 and os.path.exists(f'{MERGED_DIR}/config.json'):
-            log('Converting to CTranslate2 (faster-whisper)...')
-            try:
-                # Use the converter from THIS venv (not on PATH when run via
-                # ./venv/bin/python without activating the venv).
-                ct2_bin = os.path.join(os.path.dirname(sys.executable), 'ct2-transformers-converter')
-                subprocess.run([
-                    ct2_bin, '--model', MERGED_DIR,
-                    '--output_dir', CT2_OUTPUT,
-                    '--copy_files', 'tokenizer.json', 'preprocessor_config.json',
-                    '--quantization', 'float16', '--force',
-                ], check=True)
-                log(f'CT2 model → {CT2_OUTPUT}. Publish: ./venv/bin/python upload_to_hf.py')
-            except Exception as e:  # noqa: BLE001
-                log(f'WARN: CT2 conversion failed ({e}).')
-    else:
-        log(f'Global-best was trial {best_trial}, not the last trial run. '
-            f'Deployable LoRA adapter is at {FINAL_MODEL_DIR}; to produce the '
-            f'merged + CT2 model, load that adapter and run the conversion '
-            f'(section 12 of whisper_taiwan_finetune.py points the way).')
+    if DO_CT2 and merged_ok and os.path.exists(f'{MERGED_DIR}/config.json'):
+        log('Converting to CTranslate2 (faster-whisper)...')
+        try:
+            # Use the converter from THIS venv (not on PATH when run via
+            # ./venv/bin/python without activating the venv).
+            ct2_bin = os.path.join(os.path.dirname(sys.executable), 'ct2-transformers-converter')
+            subprocess.run([
+                ct2_bin, '--model', MERGED_DIR,
+                '--output_dir', CT2_OUTPUT,
+                '--copy_files', 'tokenizer.json', 'preprocessor_config.json',
+                '--quantization', 'float16', '--force',
+            ], check=True)
+            log(f'CT2 model → {CT2_OUTPUT}. Publish: ./venv/bin/python upload_to_hf.py')
+        except Exception as e:  # noqa: BLE001
+            log(f'WARN: CT2 conversion failed ({e}).')
 else:
     log('No completed trial produced a real-CER score (budget too small?). Nothing exported.')
 
