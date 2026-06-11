@@ -200,8 +200,35 @@ then re-run `autoresearch.py`. More domain coverage → lower held-out CER. Tips
   stable CER estimate as the dataset grows.
 - Compare runs via the per-trial `best_cer` (and `general_cer`) in the journal.
 
-Reference result: first 2h run reached **6.07% real domain CER** (trial 0,
-lr=1e-4); the deployed CT2 model verified at **0.00% CER** on held-out clips.
+### Reference results
+
+A first 2h run (default `TARGET_CER=8`, single LR trial) reached 6.07% domain CER
+but stopped early at "good enough", and a tiny 8-clip manual check read 0.00% —
+an artifact of checking seen acoustic conditions, not a real number.
+
+A longer 8h run (`TIME_BUDGET_SEC=28800 TARGET_CER=0` to force the full
+`LR_LADDER`, plus `N_HELDOUT_TEXTS=40 EVAL_CAP=200 EARLY_PATIENCE=3` for a more
+honest, stable estimate) finished in ~6h with all three LR trials done:
+
+| Trial | LR   | Domain CER | General CER (anti-forgetting) | Best step |
+|------:|-----:|-----------:|------------------------------:|----------:|
+| 0     | 1e-4 | 4.22%      | 12.10%                        | 2000      |
+| 1     | 5e-5 | 4.31%      | **38.83%**                    | 1750      |
+| **2** | 2e-4 | **4.13%**  | **11.57%**                    | 1500      |
+
+**Deployed = trial 2: 4.13% domain CER, 11.57% general CER** (best on both axes).
+Takeaways:
+
+- The realistic domain figure is **~4.1–4.3%** — all three learning rates land in
+  that band, so it's a genuine data floor, not luck. (Held-out is by *sentence*
+  but not by *speaker/recording-condition*, so it measures "unseen menu phrase,
+  same restaurant acoustics" — which matches the deployment.)
+- Domain CER bottoms out fast (best at step 1500–2000); **8h was overkill**. A
+  shorter budget suffices — watch **general CER (~12%) as a forgetting guardrail**:
+  trial 1 (lr=5e-5, continuing from already-trained weights) spiked it to 38.8%
+  for no domain gain.
+- Always sanity-check the CT2 model after a run (see below) — it confirmed the
+  merge/convert was clean before publishing.
 
 Tunable via env: `TIME_BUDGET_SEC`, `TARGET_CER`, `LR_LADDER` (comma-sep),
 `EVAL_STEPS`, `EVAL_CAP`, `GENERAL_N` (0 disables the anti-forgetting eval),
